@@ -37,9 +37,9 @@ CONF_CONNECTIONS = 'connections'
 CONF_TRIP_UPDATE_URL = 'trip_update_url'
 CONF_VEHICLE_POSITION_URL = 'vehicle_position_url'
 CONF_MIN_WALKING_TIME = 'min_walking_time'
+CONF_ROUTE_TYPE = 'route_type'
 
 DEFAULT_NAME = 'Next Service'
-ICON = 'mdi:bus'
 
 MIN_TIME_BETWEEN_UPDATES = datetime.timedelta(seconds=60)
 TIME_STR_FORMAT = "%H:%M"
@@ -55,13 +55,15 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
         vol.Required(CONF_STOP_ID): cv.string,
         vol.Required(CONF_ROUTE): cv.string,
-        vol.Optional(CONF_MIN_WALKING_TIME, default='2'): cv.string
+        vol.Optional(CONF_ROUTE_TYPE, default='bus'): cv.string,
+        vol.Optional(CONF_MIN_WALKING_TIME, default='0'): cv.string
     }],
     vol.Optional(CONF_CONNECTIONS): [{
         vol.Required(CONF_NAME): cv.string,
         vol.Required(CONF_STOP_ID): cv.string,
         vol.Required(CONF_DESTINATION): cv.string,
-        vol.Optional(CONF_MIN_WALKING_TIME, default='2'): cv.string
+        vol.Optional(CONF_ROUTE_TYPE, default='bus'): cv.string,
+        vol.Optional(CONF_MIN_WALKING_TIME, default='0'): cv.string
     }]
 })
 
@@ -75,6 +77,20 @@ class OccupancyStatus(Enum):
     NOT_ACCEPTING_PASSENGERS = 6
     NO_DATA_AVAILABLE = 7
     NOT_BOARDABLE = 8
+
+class RouteType(Enum):
+    # maps readable names to GTFS's route_type
+    # this may be helpful for route_type detection in the future
+    TRAM = 0
+    SUBWAY = 1
+    TRAIN = 2
+    BUS = 3
+    FERRY = 4
+    CABLETRAM = 5
+    GONDOLA = 6
+    FUNICULAR = 7
+    TROLLEYBUS = 11
+    MONORAIL = 12
 
 def due_in_minutes(timestamp):
     """Get the remaining minutes from now until a given datetime object."""
@@ -94,6 +110,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
                 departure.get(CONF_STOP_ID),
                 departure.get(CONF_ROUTE),
                 departure.get(CONF_NAME),
+                departure.get(CONF_ROUTE_TYPE),
                 departure.get(CONF_MIN_WALKING_TIME)
             ))
     if config.get(CONF_CONNECTIONS) is not None:
@@ -103,6 +120,7 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
                 connection.get(CONF_STOP_ID),
                 connection.get(CONF_DESTINATION),
                 connection.get(CONF_NAME),
+                connection.get(CONF_ROUTE_TYPE),
                 connection.get(CONF_MIN_WALKING_TIME)
             ))
 
@@ -112,13 +130,14 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 class PublicTransportSensor(Entity):
     """Implementation of a public transport sensor."""
 
-    def __init__(self, data, stop, route, name, min_walking_time=2):
+    def __init__(self, data, stop, route, name, routetype, min_walking_time):
         """Initialize the sensor."""
         self.data = data
         self._name = name
         self._stop = stop
         self._route = route
-        self.min_walking_time = float(min_walking_time)  # wip
+        self._routetype = RouteType[routetype.upper()]
+        self.min_walking_time = float(min_walking_time)
         self.update()
 
     @property
@@ -175,7 +194,27 @@ class PublicTransportSensor(Entity):
     @property
     def icon(self):
         """Icon to use in the frontend, if any."""
-        return ICON
+        if self._routetype == RouteType.TRAM:
+            return 'mdi-tram'
+        if self._routetype == RouteType.SUBWAY:
+            return 'mdi-subway-variant'
+        if self._routetype == RouteType.TRAIN:
+            return 'mdi-train'
+        if self._routetype == RouteType.BUS:
+            return 'mdi-bus'
+        if self._routetype == RouteType.FERRY:
+            return 'mdi-ferry'
+        if self._routetype == RouteType.CABLETRAM:
+            return 'mdi-tram'  # no mdi icon found for cable tram
+        if self._routetype == RouteType.GONDOLA:
+            return 'mdi-gondola'
+        if self._routetype == RouteType.FUNICULAR:
+            return 'mdi-tram'  # no mdi icon found for funicular
+        if self._routetype == RouteType.TROLLEYBUS:
+            return 'mdi-bus'  # no mdi icon found for trolleybus
+        if self._routetype == RouteType.MONORAIL:
+            return 'mdi-train' # no mdi icon found for mono-rail
+        return 'mdi-bus'  # 'else'
 
     def update(self):
         """Get the latest data from opendata.ch and update the states."""
@@ -183,13 +222,14 @@ class PublicTransportSensor(Entity):
 
 
 class PublicTransportSensorDestination(PublicTransportSensor):
-    def __init__(self, data, stop, destination, name, min_walking_time='2'):
+    def __init__(self, data, stop, destination, name, routetype, min_walking_time):
         """Initialize the sensor."""
         self.data = data
         self._name = name
         self._stop = stop
         self._destination = destination
-        self.min_walking_time = float(min_walking_time)  # wip
+        self._routetype = RouteType[routetype.upper()]
+        self.min_walking_time = float(min_walking_time)
         self.update()
 
     def _get_next_buses(self):
