@@ -20,9 +20,11 @@ ATTR_ROUTE = "Route"
 ATTR_DUE_IN = "Due in"
 ATTR_DUE_AT = "Due at"
 ATTR_OCCUPANCY = "Occupancy"
-ATTR_NEXT_UP = "Next bus"
-ATTR_NEXT_UP_DUE_IN = "Next bus due in"
-ATTR_NEXT_OCCUPANCY = "Next bus occupancy"
+ATTR_NEXT_UP = "Next service"
+ATTR_NEXT_UP_DUE_IN = "Next service due in"
+ATTR_NEXT_UP_DUE_IN = "Next service due in"
+ATTR_NEXT_ROUTE = "Next Route"
+ATTR_NEXT_OCCUPANCY = "Next service occupancy"
 
 CONF_API_KEY = 'api_key'
 CONF_APIKEY = 'apikey'
@@ -30,10 +32,13 @@ CONF_X_API_KEY = 'x_api_key'
 CONF_STOP_ID = 'stopid'
 CONF_ROUTE = 'route'
 CONF_DEPARTURES = 'departures'
+CONF_DESTINATION = 'destination'
+CONF_CONNECTIONS = 'connections'
 CONF_TRIP_UPDATE_URL = 'trip_update_url'
 CONF_VEHICLE_POSITION_URL = 'vehicle_position_url'
+CONF_MIN_WALKING_TIME = 'min_walking_time'
 
-DEFAULT_NAME = 'Next Bus'
+DEFAULT_NAME = 'Next Service'
 ICON = 'mdi:bus'
 
 MIN_TIME_BETWEEN_UPDATES = datetime.timedelta(seconds=60)
@@ -49,7 +54,14 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_DEPARTURES): [{
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
         vol.Required(CONF_STOP_ID): cv.string,
-        vol.Required(CONF_ROUTE): cv.string
+        vol.Required(CONF_ROUTE): cv.string,
+        vol.Optional(CONF_MIN_WALKING_TIME, default='2'): cv.string
+    }],
+    vol.Optional(CONF_CONNECTIONS): [{
+        vol.Required(CONF_NAME): cv.string,
+        vol.Required(CONF_STOP_ID): cv.string,
+        vol.Required(CONF_DESTINATION): cv.string,
+        vol.Optional(CONF_MIN_WALKING_TIME, default='2'): cv.string
     }]
 })
 
@@ -71,16 +83,28 @@ def due_in_minutes(timestamp):
 
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Get the Dublin public transport sensor."""
+    """Get the public transport sensor."""
+
     data = PublicTransportData(config.get(CONF_TRIP_UPDATE_URL), config.get(CONF_VEHICLE_POSITION_URL), config.get(CONF_API_KEY), config.get(CONF_X_API_KEY), config.get(CONF_APIKEY))
     sensors = []
-    for departure in config.get(CONF_DEPARTURES):
-        sensors.append(PublicTransportSensor(
-            data,
-            departure.get(CONF_STOP_ID),
-            departure.get(CONF_ROUTE),
-            departure.get(CONF_NAME)
-        ))
+    if config.get(CONF_DEPARTURES) is not None:
+        for departure in config.get(CONF_DEPARTURES):
+            sensors.append(PublicTransportSensor(
+                data,
+                departure.get(CONF_STOP_ID),
+                departure.get(CONF_ROUTE),
+                departure.get(CONF_NAME),
+                departure.get(CONF_MIN_WALKING_TIME)
+            ))
+    if config.get(CONF_CONNECTIONS) is not None:
+        for connection in config.get(CONF_CONNECTIONS):
+            sensors.append(PublicTransportSensorDestination(
+                data,
+                connection.get(CONF_STOP_ID),
+                connection.get(CONF_DESTINATION),
+                connection.get(CONF_NAME),
+                connection.get(CONF_MIN_WALKING_TIME)
+            ))
 
     add_devices(sensors)
 
@@ -88,12 +112,13 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 class PublicTransportSensor(Entity):
     """Implementation of a public transport sensor."""
 
-    def __init__(self, data, stop, route, name):
+    def __init__(self, data, stop, route, name, min_walking_time=2):
         """Initialize the sensor."""
         self.data = data
         self._name = name
         self._stop = stop
         self._route = route
+        self.min_walking_time = float(min_walking_time)  # wip
         self.update()
 
     @property
@@ -101,7 +126,18 @@ class PublicTransportSensor(Entity):
         return self._name
 
     def _get_next_buses(self):
-        return self.data.info.get(self._route, {}).get(self._stop, [])
+        depart = []
+        for trip in self.data.info.get(self._route, {}):
+            if self._stop in trip:
+                # skip connections from the past and that can't be reached in the very near future
+                if due_in_minutes(trip[self._stop].arrival_time) < self.min_walking_time:
+                    continue
+                depart.append(trip[self._stop])
+
+        # Sort by arrival time
+        depart.sort(key = lambda t: t.arrival_time)
+
+        return depart
 
     @property
     def state(self):
@@ -116,15 +152,16 @@ class PublicTransportSensor(Entity):
         attrs = {
             ATTR_DUE_IN: self.state,
             ATTR_STOP_ID: self._stop,
-            ATTR_ROUTE: self._route
         }
         if len(next_buses) > 0:
+            attrs[ATTR_ROUTE] = next_buses[0].route_id
             attrs[ATTR_DUE_AT] = next_buses[0].arrival_time.strftime(TIME_STR_FORMAT) if len(next_buses) > 0 else '-'
             attrs[ATTR_OCCUPANCY] = next_buses[0].occupancy
             if next_buses[0].position:
                 attrs[ATTR_LATITUDE] = next_buses[0].position.latitude
                 attrs[ATTR_LONGITUDE] = next_buses[0].position.longitude
         if len(next_buses) > 1:
+            attrs[ATTR_NEXT_ROUTE] = next_buses[1].route_id
             attrs[ATTR_NEXT_UP] = next_buses[1].arrival_time.strftime(TIME_STR_FORMAT) if len(next_buses) > 1 else '-'
             attrs[ATTR_NEXT_UP_DUE_IN] = due_in_minutes(next_buses[1].arrival_time) if len(next_buses) > 1 else '-'
             attrs[ATTR_NEXT_OCCUPANCY] = next_buses[1].occupancy
@@ -143,6 +180,41 @@ class PublicTransportSensor(Entity):
     def update(self):
         """Get the latest data from opendata.ch and update the states."""
         self.data.update()
+
+
+class PublicTransportSensorDestination(PublicTransportSensor):
+    def __init__(self, data, stop, destination, name, min_walking_time='2'):
+        """Initialize the sensor."""
+        self.data = data
+        self._name = name
+        self._stop = stop
+        self._destination = destination
+        self.min_walking_time = float(min_walking_time)  # wip
+        self.update()
+
+    def _get_next_buses(self):
+        # now implement the new functionality:
+        # find all connections from stop_id towards a dest_id
+        # this is of course a more demanding task since we need to go through
+        # all the data
+        # this probably does not really work with circle lines
+        # departure_times[route_id][-1][stop_id]
+        connections = []
+        for line_id, trips in self.data.info.items():
+            for trip in trips:
+                if self._stop in trip and self._destination in trip:
+                    # skip connections from the past and that can't be reached in the very near future
+                    if due_in_minutes(trip[self._stop].arrival_time) < self.min_walking_time:
+                        continue
+                    stops = list(trip.keys())
+                    # select correct travel direction
+                    if stops.index(self._destination) > stops.index(self._stop):
+                        connections.append(trip[self._stop])
+
+        # Sort by arrival time
+        connections.sort(key = lambda t: t.arrival_time)
+
+        return connections
 
 
 class PublicTransportData(object):
@@ -172,7 +244,8 @@ class PublicTransportData(object):
         from google.transit import gtfs_realtime_pb2
 
         class StopDetails:
-            def __init__(self, arrival_time, position, occupancy):
+            def __init__(self, route_id, arrival_time, position, occupancy):
+                self.route_id = str(route_id)
                 self.arrival_time = arrival_time
                 self.position = position
                 self.occupancy = occupancy
@@ -183,7 +256,7 @@ class PublicTransportData(object):
             _LOGGER.error("updating route status got {}:{}".format(response.status_code,response.content))
         feed.ParseFromString(response.content)
         departure_times = {}
-        
+
         for entity in feed.entity:
             if entity.HasField('trip_update'):
                 route_id = entity.trip_update.trip.route_id
@@ -194,25 +267,20 @@ class PublicTransportData(object):
                     vehicle_id = vehicles_trips.get(entity.trip_update.trip.trip_id)
 
                 if route_id not in departure_times:
-                    departure_times[route_id] = {}
+                    departure_times[route_id] = []
+
+                departure_times[route_id].append({})
+
                 for stop in entity.trip_update.stop_time_update:
                     stop_id = stop.stop_id
-                    if not departure_times[route_id].get(stop_id):
-                        departure_times[route_id][stop_id] = []
-                    # Keep only future arrival.time (gtfs data can give past arrival.time, which is useless and show negative time as result)
-                    if int(stop.arrival.time) > int(time.time()):
-                        # Use stop departure time; fall back on stop arrival time if not available
-                        details = StopDetails(
-                            datetime.datetime.fromtimestamp(stop.arrival.time),
-                            vehicle_positions.get(vehicle_id),
-                            vehicle_occupancy.get(vehicle_id)
-                        )
-                        departure_times[route_id][stop_id].append(details)
-
-        # Sort by arrival time
-        for route in departure_times:
-            for stop in departure_times[route]:
-                departure_times[route][stop].sort(key=lambda t: t.arrival_time)
+                    # Use stop departure time; fall back on stop arrival time if not available
+                    details = StopDetails(
+                        route_id,  # a bit redundant here, but helpful later
+                        datetime.datetime.fromtimestamp(stop.arrival.time),
+                        vehicle_positions.get(vehicle_id),
+                        vehicle_occupancy.get(vehicle_id)
+                    )
+                    departure_times[route_id][-1][stop_id] = details
 
         self.info = departure_times
 
