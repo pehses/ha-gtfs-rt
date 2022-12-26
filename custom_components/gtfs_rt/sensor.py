@@ -195,26 +195,26 @@ class PublicTransportSensor(Entity):
     def icon(self):
         """Icon to use in the frontend, if any."""
         if self._routetype == RouteType.TRAM:
-            return 'mdi-tram'
+            return 'mdi:tram'
         if self._routetype == RouteType.SUBWAY:
-            return 'mdi-subway-variant'
+            return 'mdi:subway'
         if self._routetype == RouteType.TRAIN:
-            return 'mdi-train'
+            return 'mdi:train'
         if self._routetype == RouteType.BUS:
-            return 'mdi-bus'
+            return 'mdi:bus'
         if self._routetype == RouteType.FERRY:
-            return 'mdi-ferry'
+            return 'mdi:ferry'
         if self._routetype == RouteType.CABLETRAM:
-            return 'mdi-tram'  # no mdi icon found for cable tram
+            return 'mdi:tram'  # no mdi icon found for cable tram
         if self._routetype == RouteType.GONDOLA:
-            return 'mdi-gondola'
+            return 'mdi:gondola'
         if self._routetype == RouteType.FUNICULAR:
-            return 'mdi-tram'  # no mdi icon found for funicular
+            return 'mdi:tram'  # no mdi icon found for funicular
         if self._routetype == RouteType.TROLLEYBUS:
-            return 'mdi-bus'  # no mdi icon found for trolleybus
+            return 'mdi:bus'  # no mdi icon found for trolleybus
         if self._routetype == RouteType.MONORAIL:
-            return 'mdi-train' # no mdi icon found for mono-rail
-        return 'mdi-bus'  # 'else'
+            return 'mdi:train' # no mdi icon found for mono-rail
+        return 'mdi:bus'  # 'else'
 
     def update(self):
         """Get the latest data from opendata.ch and update the states."""
